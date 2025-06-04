@@ -1,8 +1,13 @@
 package be.vives.cardex
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -16,15 +21,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import be.vives.cardex.ui.theme.CarDexTheme
+import coil.compose.rememberImagePainter
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 
 data class Car(
     val name: String,
     val motorType: String,
     val maxPower: String,
-    val imageRes: Int
+    val imageUri: String
 )
 
 class MainActivity : ComponentActivity() {
@@ -40,15 +49,36 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun CarApp() {
+    val sharedPreferences = LocalContext.current.getSharedPreferences("CarDexPrefs", Context.MODE_PRIVATE)
+    val gson = Gson()
     val cars = remember {
-        mutableStateListOf(
-            Car("BMW M8 Competition", "ICE", "625 HP", R.drawable.car1),
-            Car("BMW X6", "MHEV", "340 HP", R.drawable.car2),
-            Car("BMW M3 Competition", "ICE", "510 HP", R.drawable.car3),
-            Car("BMW XM", "PHEV", "750 HP", R.drawable.car4)
-        )
+        mutableStateListOf<Car>().apply {
+            val savedCarsJson = sharedPreferences.getString("cars", null)
+            if (savedCarsJson != null) {
+                val type = object : TypeToken<List<Car>>() {}.type
+                addAll(gson.fromJson(savedCarsJson, type))
+            } else {
+                addAll(
+                    listOf(
+                        Car("BMW M8 Competition", "ICE", "625 HP", "android.resource://be.vives.cardex/drawable/car1"),
+                        Car("BMW X6", "MHEV", "340 HP", "android.resource://be.vives.cardex/drawable/car2"),
+                        Car("BMW M3 Competition", "ICE", "510 HP", "android.resource://be.vives.cardex/drawable/car3"),
+                        Car("BMW XM", "PHEV", "750 HP", "android.resource://be.vives.cardex/drawable/car4")
+                    )
+                )
+            }
+        }
     }
     var selectedCar by remember { mutableStateOf<Car?>(null) }
+    var showDialog by remember { mutableStateOf(false) }
+    var newCarImageUri by remember { mutableStateOf<String?>(null) }
+
+    val addCarLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        uri?.let {
+            newCarImageUri = it.toString()
+            showDialog = true
+        }
+    }
 
     @OptIn(ExperimentalMaterial3Api::class)
     Scaffold(
@@ -57,9 +87,9 @@ fun CarApp() {
         },
         floatingActionButton = {
             FloatingActionButton(onClick = {
-                // Voeg logica toe om een voertuig toe te voegen via foto of galerij
+                addCarLauncher.launch("image/*")
             }) {
-                Icon(Icons.Default.Add, contentDescription = "Add Car")
+                Icon(Icons.Default.Add, contentDescription = "Voeg voertuig toe")
             }
         }
     ) { innerPadding ->
@@ -75,6 +105,76 @@ fun CarApp() {
             }
         }
     }
+
+    if (showDialog) {
+        AddCarDialog(
+            imageUri = newCarImageUri,
+            onAddCar = { name, motorType, maxPower ->
+                val newCar = Car(name, motorType, maxPower, newCarImageUri ?: "")
+                cars.add(newCar)
+                sharedPreferences.edit().putString("cars", gson.toJson(cars)).apply()
+                showDialog = false
+            },
+            onDismiss = { showDialog = false }
+        )
+    }
+}
+
+@Composable
+fun AddCarDialog(imageUri: String?, onAddCar: (String, String, String) -> Unit, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf("") }
+    var motorType by remember { mutableStateOf("") }
+    var maxPower by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Voeg voertuig details toe") },
+        text = {
+            Column {
+                imageUri?.let {
+                    Image(
+                        painter = rememberImagePainter(data = it),
+                        contentDescription = null,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(150.dp),
+                        contentScale = ContentScale.Crop
+                    )
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Naam") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = motorType,
+                    onValueChange = { motorType = it },
+                    label = { Text("Motor type") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = maxPower,
+                    onValueChange = { maxPower = it },
+                    label = { Text("Max. Vermogen") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                onAddCar(name, motorType, maxPower)
+            }) {
+                Text("Toevoegen")
+            }
+        },
+        dismissButton = {
+            Button(onClick = onDismiss) {
+                Text("Terug")
+            }
+        }
+    )
 }
 
 @Composable
@@ -98,7 +198,7 @@ fun CarList(cars: List<Car>, onCarClick: (Car) -> Unit) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Image(
-                        painter = painterResource(id = car.imageRes),
+                        painter = rememberImagePainter(data = car.imageUri),
                         contentDescription = car.name,
                         modifier = Modifier.size(64.dp),
                         contentScale = ContentScale.Crop
@@ -121,7 +221,7 @@ fun CarDetails(car: Car?, onBack: () -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Image(
-                painter = painterResource(id = car.imageRes),
+                painter = rememberImagePainter(data = car.imageUri),
                 contentDescription = car.name,
                 modifier = Modifier.size(200.dp),
                 contentScale = ContentScale.Crop
